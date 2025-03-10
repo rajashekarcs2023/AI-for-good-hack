@@ -1,7 +1,6 @@
 "use client"
 
 import { DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-
 import { useState, useRef, useEffect, useCallback } from "react"
 import {
   ChevronDown,
@@ -51,7 +50,11 @@ import { Label } from "@/components/ui/label"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { VoiceVisualizer } from "@/components/voice-visualizer"
 
+// Import API functions
+import { fetchHeatMap, runSimulation, runAdvancedAnalysis, processVoiceCommand, queryGraphRAG } from "@/lib/api"
+
 export default function UrbanShade() {
+  // Base state variables
   const [isBottomPanelExpanded, setIsBottomPanelExpanded] = useState(false)
   const [selectedTool, setSelectedTool] = useState("select")
   const [totalCost, setTotalCost] = useState(0)
@@ -86,29 +89,17 @@ export default function UrbanShade() {
     "Compare with similar neighborhoods",
   ])
 
-  const mapRef = useRef<HTMLDivElement>(null)
-  const transcriptionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const responseTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-
-  const tools = [
-    { id: "select", name: "Select", icon: MousePointer, effectiveness: null },
-    { id: "trees", name: "Place Trees", icon: Tree, effectiveness: 92 },
-    { id: "roofs", name: "Add Cool Roof", icon: Home, effectiveness: 78 },
-    { id: "green", name: "Add Green Space", icon: Layers, effectiveness: 85 },
-    { id: "water", name: "Add Water Feature", icon: Droplets, effectiveness: 89 },
-    { id: "shade", name: "Add Shade Structure", icon: Umbrella, effectiveness: 76 },
-  ]
-
-  const neighborhoods = ["Downtown", "Midtown", "Westside", "Eastside", "Northside", "Industrial District"]
-
-  const similarAreas = [
+  // Data state variables
+  const [selectedNeighborhood, setSelectedNeighborhood] = useState("Downtown")
+  const [heatMap, setHeatMap] = useState<any[]>([])
+  const [interventions, setInterventions] = useState<Array<{type: string, x: number, y: number}>>([])
+  const [similarAreasData, setSimilarAreasData] = useState([
     { name: "Phoenix - Roosevelt Row", image: "/placeholder.svg?height=100&width=150", reduction: "3.2°C" },
     { name: "Madrid - Lavapiés", image: "/placeholder.svg?height=100&width=150", reduction: "2.8°C" },
     { name: "Melbourne - CBD", image: "/placeholder.svg?height=100&width=150", reduction: "2.5°C" },
     { name: "Seoul - Gangnam", image: "/placeholder.svg?height=100&width=150", reduction: "2.1°C" },
-  ]
-
-  const recommendations = [
+  ])
+  const [recommendationsData, setRecommendationsData] = useState([
     {
       title: "Strategic Tree Placement",
       description: "Place trees along southern building facades for maximum shade impact",
@@ -130,7 +121,22 @@ export default function UrbanShade() {
       graphScore: 75,
       vectorScore: 81,
     },
+  ])
+
+  const mapRef = useRef<HTMLDivElement>(null)
+  const transcriptionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const responseTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  const tools = [
+    { id: "select", name: "Select", icon: MousePointer, effectiveness: null },
+    { id: "trees", name: "Place Trees", icon: Tree, effectiveness: 92 },
+    { id: "roofs", name: "Add Cool Roof", icon: Home, effectiveness: 78 },
+    { id: "green", name: "Add Green Space", icon: Layers, effectiveness: 85 },
+    { id: "water", name: "Add Water Feature", icon: Droplets, effectiveness: 89 },
+    { id: "shade", name: "Add Shade Structure", icon: Umbrella, effectiveness: 76 },
   ]
+
+  const neighborhoods = ["Downtown", "Midtown", "Westside", "Eastside", "Northside", "Industrial District"]
 
   const dataSources = [
     { type: "Knowledge Graph", name: "Urban Heat Island Neo4j Graph", nodes: "12,450", relationships: "45,320" },
@@ -138,8 +144,188 @@ export default function UrbanShade() {
     { type: "Document Store", name: "Urban Planning Case Studies", documents: "3,250", pages: "42,800" },
     { type: "Sensor Data", name: "City Temperature Monitoring", sensors: "342", readings: "15M/year" },
   ]
+  // Fetch initial heat map when component mounts or neighborhood changes
+  useEffect(() => {
+    async function loadHeatMap() {
+      try {
+        const data = await fetchHeatMap(selectedNeighborhood);
+        if (data && data.heatMap) {
+          setHeatMap(data.heatMap);
+        }
+      } catch (error) {
+        console.error("Failed to load heat map:", error);
+      }
+    }
+    
+    loadHeatMap();
+  }, [selectedNeighborhood]);
 
-  // Simulated voice recognition
+  // Add element to map and run simulation
+  const addElementToMap = async (toolId: string, x: number, y: number) => {
+    // Calculate percentage position for map
+    const rect = mapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    
+    const percentX = (x / rect.width) * 100;
+    const percentY = (y / rect.height) * 100;
+    
+    // Create a new intervention
+    const newIntervention = { type: toolId, x: percentX, y: percentY };
+    const updatedInterventions = [...interventions, newIntervention];
+    setInterventions(updatedInterventions);
+    
+    // Run simulation
+    try {
+      const result = await runSimulation(selectedNeighborhood, updatedInterventions, heatMap);
+      if (result.newHeatMap) setHeatMap(result.newHeatMap);
+      if (result.statistics) {
+        setTotalCost(result.statistics.totalCost);
+        setTempReduction(result.statistics.averageTempReduction);
+      }
+    } catch (error) {
+      console.error("Simulation failed:", error);
+      
+      // Update UI with local calculations
+      let cost = 0;
+      let tempEffect = 0;
+
+      switch (toolId) {
+        case "trees":
+          cost = 500;
+          tempEffect = 0.2;
+          break;
+        case "roofs":
+          cost = 5000;
+          tempEffect = 0.5;
+          break;
+        case "green":
+          cost = 10000;
+          tempEffect = 0.8;
+          break;
+        case "water":
+          cost = 15000;
+          tempEffect = 1.0;
+          break;
+        case "shade":
+          cost = 8000;
+          tempEffect = 0.6;
+          break;
+      }
+
+      setTotalCost((prev) => prev + cost);
+      setTempReduction((prev) => prev + tempEffect);
+    }
+  };
+
+  // Handle neighborhood selection
+  const handleNeighborhoodChange = (neighborhood: string) => {
+    setSelectedNeighborhood(neighborhood);
+    // Reset interventions when changing neighborhoods
+    setInterventions([]);
+    setTotalCost(0);
+    setTempReduction(0);
+  };
+
+  // Run advanced analysis with GraphRAG
+  const handleRunAdvancedAnalysis = async () => {
+    setIsAnalysisRunning(true);
+    
+    try {
+      const result = await runAdvancedAnalysis(
+        selectedNeighborhood, 
+        interventions,
+        {
+          climate: selectedFilters.climate,
+          density: selectedFilters.density,
+          materials: selectedFilters.materials,
+          demographics: selectedFilters.demographics
+        }
+      );
+      
+      // Update UI with results
+      if (result.similarAreas) setSimilarAreasData(result.similarAreas);
+      if (result.recommendations) setRecommendationsData(result.recommendations);
+      
+      setIsInsightsPanelOpen(true);
+    } catch (error) {
+      console.error("Advanced analysis failed:", error);
+    } finally {
+      setIsAnalysisRunning(false);
+    }
+  };
+
+  // Run simulation
+  const handleRunSimulation = async () => {
+    try {
+      const result = await runSimulation(selectedNeighborhood, interventions, heatMap);
+      if (result.newHeatMap) setHeatMap(result.newHeatMap);
+      if (result.statistics) {
+        setTotalCost(result.statistics.totalCost);
+        setTempReduction(result.statistics.averageTempReduction);
+      }
+    } catch (error) {
+      console.error("Simulation failed:", error);
+    }
+  };
+
+  // Process voice command
+  const handleVoiceCommand = useCallback(async (command: string) => {
+    setVoiceState("processing");
+    
+    // Add to command history
+    setCommandHistory((prev) => [{ text: command, timestamp: "Just now" }, ...prev.slice(0, 4)]);
+    
+    try {
+      // Determine if the query is complex enough for GraphRAG
+      const isComplexQuery = 
+        command.includes("why") || 
+        command.includes("how") || 
+        command.includes("explain") ||
+        command.includes("detail") ||
+        command.length > 50;
+      
+      let result;
+      
+      if (isComplexQuery) {
+        // Use GraphRAG for complex queries
+        const graphResult = await queryGraphRAG(command);
+        
+        // Convert GraphRAG response to the format expected by the UI
+        result = {
+          response: graphResult.response,
+          action: "none",
+          parameters: {}
+        };
+      } else {
+        // Use regular voice processing for simpler commands
+        result = await processVoiceCommand(command);
+      }
+      
+      setAssistantResponse(result.response);
+      
+      // Handle actions
+      if (result.action === "highlight" && result.parameters?.areas) {
+        const areas = result.parameters.areas.map(([x, y]: number[]) => ({
+          x,
+          y,
+          radius: 40,
+          color: result.parameters.type === "heat" 
+            ? "rgba(255, 0, 0, 0.3)" 
+            : "rgba(0, 255, 0, 0.3)"
+        }));
+        
+        setHighlightedAreas(areas);
+      }
+      
+      setVoiceState("responding");
+      simulateAssistantSpeaking(result.response);
+    } catch (error) {
+      console.error("Voice command processing failed:", error);
+      setAssistantResponse("I'm sorry, I had trouble processing that request.");
+      setVoiceState("responding");
+    }
+  }, []);
+  // Simulated voice recognition with actual API integration
   const startVoiceRecognition = () => {
     setVoiceState("listening")
     setIsVoicePanelOpen(true)
@@ -165,50 +351,10 @@ export default function UrbanShade() {
         if (transcriptionTimeoutRef.current) {
           clearInterval(transcriptionTimeoutRef.current)
         }
-        processVoiceCommand(selectedQuery)
+        handleVoiceCommand(selectedQuery)
       }
     }, 50)
   }
-
-  const processVoiceCommand = useCallback((command: string) => {
-    setVoiceState("processing")
-
-    // Add to command history
-    setCommandHistory((prev) => [{ text: command, timestamp: "Just now" }, ...prev.slice(0, 4)])
-
-    // Simulate processing delay
-    setTimeout(() => {
-      let response = ""
-      let areas: Array<{x: number, y: number, radius: number, color: string}> = []
-
-      // Generate response based on command
-      if (command.includes("hottest areas")) {
-        response =
-          "Based on our thermal analysis, the hottest areas are concentrated around the central business district, particularly at the intersection of Main and Commerce streets. These areas show temperatures up to 4.2°C higher than surrounding neighborhoods due to high building density and dark surface materials."
-        areas = [{ x: 45, y: 35, radius: 80, color: "rgba(255, 0, 0, 0.3)" }]
-      } else if (command.includes("trees")) {
-        response =
-          "For maximum cooling impact, I recommend adding trees along the southern edge of Central Plaza and the western side of Commerce Street. This strategic placement would provide shade during peak heat hours and could reduce local temperatures by up to 2.1°C based on similar implementations in Phoenix."
-        areas = [
-          { x: 60, y: 50, radius: 40, color: "rgba(0, 255, 0, 0.3)" },
-          { x: 30, y: 60, radius: 30, color: "rgba(0, 255, 0, 0.3)" },
-        ]
-      } else if (command.includes("interventions") || command.includes("work best")) {
-        response =
-          "For the central plaza area, a combination of shade structures and permeable pavement would be most effective. The knowledge graph shows that similar urban spaces achieved a 3.5°C reduction using this approach. I've highlighted the optimal placement areas on the map."
-        areas = [{ x: 50, y: 50, radius: 60, color: "rgba(0, 0, 255, 0.3)" }]
-      } else if (command.includes("cost")) {
-        response =
-          "To achieve a 2°C temperature reduction in the downtown area, the most cost-effective approach would be a combination of 45 strategically placed trees ($22,500) and cool roof treatments for 12 key buildings ($60,000). This would provide the target reduction with an estimated ROI of 4.2 years through energy savings."
-        areas = [{ x: 40, y: 40, radius: 100, color: "rgba(255, 165, 0, 0.2)" }]
-      }
-
-      setAssistantResponse(response)
-      setHighlightedAreas(areas)
-      setVoiceState("responding")
-      simulateAssistantSpeaking(response)
-    }, 1000)
-  }, [])
 
   const simulateAssistantSpeaking = (text: string) => {
     setIsAssistantSpeaking(true)
@@ -253,9 +399,9 @@ export default function UrbanShade() {
   const useSuggestedCommand = useCallback(
     (command: string) => {
       setTranscription(command)
-      processVoiceCommand(command)
+      handleVoiceCommand(command)
     },
-    [processVoiceCommand],
+    [handleVoiceCommand],
   )
 
   const handleToolDragStart = (e: React.DragEvent<HTMLDivElement>, tool: {id: string, name: string, icon: any, effectiveness: number | null}) => {
@@ -302,53 +448,6 @@ export default function UrbanShade() {
     }
   }
 
-  const addElementToMap = (toolId: string, x: number, y: number) => {
-    // In a real app, this would add the element to the map
-    // For this demo, we'll just update the cost and temperature reduction
-    let cost = 0
-    let tempEffect = 0
-
-    switch (toolId) {
-      case "trees":
-        cost = 500
-        tempEffect = 0.2
-        break
-      case "roofs":
-        cost = 5000
-        tempEffect = 0.5
-        break
-      case "green":
-        cost = 10000
-        tempEffect = 0.8
-        break
-      case "water":
-        cost = 15000
-        tempEffect = 1.0
-        break
-      case "shade":
-        cost = 8000
-        tempEffect = 0.6
-        break
-    }
-
-    setTotalCost((prev) => prev + cost)
-    setTempReduction((prev) => prev + tempEffect)
-  }
-
-  const runSimulation = () => {
-    // In a real app, this would run the heat simulation
-    alert("Running heat simulation...")
-  }
-
-  const runAdvancedAnalysis = () => {
-    setIsAnalysisRunning(true)
-    // Simulate analysis running
-    setTimeout(() => {
-      setIsAnalysisRunning(false)
-      setIsInsightsPanelOpen(true)
-    }, 2500)
-  }
-
   const toggleFilter = (filter: keyof typeof selectedFilters) => {
     setSelectedFilters((prev) => ({
       ...prev,
@@ -367,6 +466,50 @@ export default function UrbanShade() {
       }
     }
   }, [])
+  // Function to generate heat map visualization
+  const renderHeatMap = () => {
+    if (!heatMap || heatMap.length === 0) return null;
+    
+    // Create a simplified heatmap visualization
+    const width = 100;
+    const height = 100;
+    const cellSize = 10;
+    
+    return (
+      <div className="absolute inset-0 pointer-events-none">
+        <svg width="100%" height="100%" viewBox={`0 0 ${width * cellSize} ${height * cellSize}`} preserveAspectRatio="none">
+          <defs>
+            <radialGradient id="heatGradient" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+              <stop offset="0%" stopColor="rgba(255, 0, 0, 0.7)" />
+              <stop offset="100%" stopColor="rgba(255, 0, 0, 0)" />
+            </radialGradient>
+          </defs>
+          
+          {heatMap.slice(0, 200).map((point, index) => {
+            const temp = point[2];
+            const normalizedTemp = Math.min(Math.max((temp - 25) / 15, 0), 1); // normalize to 0-1
+            
+            if (normalizedTemp < 0.5) return null; // Only show hot spots
+            
+            const x = point[0] * cellSize;
+            const y = point[1] * cellSize;
+            const radius = normalizedTemp * 40;
+            
+            return (
+              <circle 
+                key={index} 
+                cx={x} 
+                cy={y} 
+                r={radius}
+                fill="url(#heatGradient)"
+                opacity={normalizedTemp * 0.8}
+              />
+            );
+          })}
+        </svg>
+      </div>
+    );
+  };
 
   return (
     <div className="flex flex-col h-screen bg-slate-50">
@@ -425,7 +568,7 @@ export default function UrbanShade() {
                   <Wand2 className="w-4 h-4 mr-1" />
                   Optimize
                 </Button>
-              </TooltipTrigger>
+                </TooltipTrigger>
               <TooltipContent>Optimize current plan</TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -445,12 +588,17 @@ export default function UrbanShade() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm">
-                Downtown <ChevronDown className="w-4 h-4 ml-1" />
+                {selectedNeighborhood} <ChevronDown className="w-4 h-4 ml-1" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
               {neighborhoods.map((neighborhood) => (
-                <DropdownMenuItem key={neighborhood}>{neighborhood}</DropdownMenuItem>
+                <DropdownMenuItem 
+                  key={neighborhood}
+                  onClick={() => handleNeighborhoodChange(neighborhood)}
+                >
+                  {neighborhood}
+                </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -591,7 +739,6 @@ export default function UrbanShade() {
               </TooltipProvider>
             ))}
           </div>
-
           <Separator />
 
           <div className="p-4 mt-auto">
@@ -615,16 +762,97 @@ export default function UrbanShade() {
           {/* Map */}
           <div
             ref={mapRef}
-            className="w-full h-full relative cursor-crosshair"
+            className="w-full h-full relative cursor-crosshair bg-slate-100"
             onClick={handleMapClick}
             onMouseMove={handleMapMouseMove}
             onDragOver={handleMapDragOver}
             onDrop={handleMapDrop}
           >
-            <img src="/placeholder.svg?height=1080&width=1920" alt="Map" className="w-full h-full object-cover" />
+            {/* Base map - use a satellite or map image */}
+            <img 
+              src="/placeholder.svg?height=1080&width=1920" 
+              alt="Map" 
+              className="w-full h-full object-cover" 
+              style={{ opacity: 0.9 }}
+            />
 
-            {/* Heat map overlay */}
-            <div className="absolute inset-0 bg-gradient-to-br from-red-500/30 via-orange-400/20 to-blue-300/30 pointer-events-none"></div>
+            {/* Render dynamic heat map */}
+            {renderHeatMap()}
+
+            {/* Heat map overlay - this creates a more realistic heat effect */}
+            <div className="absolute inset-0 bg-gradient-to-br from-red-500/10 via-orange-400/5 to-blue-300/5 pointer-events-none"></div>
+
+            {/* City buildings outline overlay - this would be more detailed in a real implementation */}
+            <div className="absolute inset-0 pointer-events-none">
+              {/* This would be a more detailed SVG of city outlines in a real app */}
+              <svg width="100%" height="100%" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+                <g stroke="rgba(0,0,0,0.2)" strokeWidth="1" fill="none">
+                  {/* Mock city blocks */}
+                  <rect x="100" y="100" width="200" height="150" />
+                  <rect x="350" y="100" width="150" height="100" />
+                  <rect x="550" y="120" width="180" height="130" />
+                  <rect x="100" y="300" width="300" height="200" />
+                  <rect x="450" y="280" width="250" height="180" />
+                  <rect x="150" y="550" width="220" height="150" />
+                  <rect x="420" y="520" width="200" height="180" />
+                  <rect x="650" y="500" width="150" height="220" />
+                  {/* Streets */}
+                  <line x1="0" y1="250" x2="1000" y2="250" />
+                  <line x1="0" y1="500" x2="1000" y2="500" />
+                  <line x1="0" y1="750" x2="1000" y2="750" />
+                  <line x1="250" y1="0" x2="250" y2="1000" />
+                  <line x1="500" y1="0" x2="500" y2="1000" />
+                  <line x1="750" y1="0" x2="750" y2="1000" />
+                </g>
+              </svg>
+            </div>
+
+            {/* Interventions visualized */}
+            {interventions.map((intervention, index) => {
+              // Different visual for each intervention type
+              let Icon = Tree;
+              let bgColor = "bg-green-500";
+              
+              switch (intervention.type) {
+                case "trees":
+                  Icon = Tree;
+                  bgColor = "bg-green-500";
+                  break;
+                case "roofs":
+                  Icon = Home;
+                  bgColor = "bg-slate-400";
+                  break;
+                case "green":
+                  Icon = Layers;
+                  bgColor = "bg-emerald-500";
+                  break;
+                case "water":
+                  Icon = Droplets;
+                  bgColor = "bg-blue-500";
+                  break;
+                case "shade":
+                  Icon = Umbrella;
+                  bgColor = "bg-amber-500";
+                  break;
+              }
+              
+              return (
+                <div
+                  key={index}
+                  className={`absolute rounded-full ${bgColor} flex items-center justify-center text-white`}
+                  style={{
+                    left: `${intervention.x}%`,
+                    top: `${intervention.y}%`,
+                    width: '24px',
+                    height: '24px',
+                    transform: 'translate(-50%, -50%)',
+                  }}
+                >
+                  <Icon className="w-4 h-4" />
+                  <div className={`absolute inset-0 ${bgColor}/20 rounded-full animate-ping opacity-75`}></div>
+                </div>
+              );
+            })}
 
             {/* Highlighted areas from voice commands */}
             {highlightedAreas.map((area, index) => (
@@ -658,7 +886,7 @@ export default function UrbanShade() {
             <Button
               className="rounded-full shadow-lg bg-indigo-600 hover:bg-indigo-700"
               size="lg"
-              onClick={runAdvancedAnalysis}
+              onClick={handleRunAdvancedAnalysis}
               disabled={isAnalysisRunning}
             >
               {isAnalysisRunning ? (
@@ -693,13 +921,12 @@ export default function UrbanShade() {
               )}
             </Button>
 
-            <Button className="rounded-full shadow-lg" size="lg" onClick={runSimulation}>
+            <Button className="rounded-full shadow-lg" size="lg" onClick={handleRunSimulation}>
               <Play className="w-5 h-5 mr-1" />
               Run Simulation
             </Button>
           </div>
-
-          {/* Voice Interaction Panel - UPDATED POSITIONING */}
+          {/* Voice Interaction Panel */}
           {isVoicePanelOpen && (
             <div className="absolute top-0 right-0 h-full w-80 bg-white shadow-lg border-l transform transition-transform duration-300 ease-in-out overflow-y-auto z-20">
               <div className="flex items-center justify-between p-3 border-b bg-slate-50 sticky top-0">
@@ -847,7 +1074,7 @@ export default function UrbanShade() {
               <div className="mb-6">
                 <h3 className="text-sm font-medium text-slate-800 mb-3">Similar Urban Areas</h3>
                 <div className="grid grid-cols-2 gap-2">
-                  {similarAreas.map((area, index) => (
+                  {similarAreasData.map((area, index) => (
                     <div key={index} className="rounded-md border overflow-hidden">
                       <img
                         src={area.image || "/placeholder.svg"}
@@ -914,7 +1141,7 @@ export default function UrbanShade() {
               <div>
                 <h3 className="text-sm font-medium text-slate-800 mb-3">Recommended Interventions</h3>
                 <div className="space-y-3">
-                  {recommendations.map((rec, index) => (
+                  {recommendationsData.map((rec, index) => (
                     <Card key={index}>
                       <CardHeader className="p-3 pb-0">
                         <div className="flex justify-between items-start">
@@ -1102,4 +1329,3 @@ export default function UrbanShade() {
     </div>
   )
 }
-
